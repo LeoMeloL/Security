@@ -1,17 +1,51 @@
-# app.py
+# app1.4.py
 
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 import jwt
 from datetime import datetime, timedelta
-from sqlalchemy import text # Importe o 'text'
+from sqlalchemy import text
+from logging.handlers import RotatingFileHandler
 import pickle
 import base64
-import os # Importe o 'os' para a demonstração do ataque
+import os 
 import time
+import logging
+from waf import waf_protection
+
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 app = Flask(__name__)
+
+waf_protection(app)
+
+
+handler = RotatingFileHandler('app.log', maxBytes=10000, backupCount=1) 
+handler.setLevel(logging.INFO)
+formatter = logging.Formatter(
+    '%(asctime)s [%(levelname)s] IP:%(remote_addr)s - %(message)s'
+)
+handler.setFormatter(formatter)
+
+class RequestFormatter(logging.Formatter):
+    def format(self, record):
+        if 'remote_addr' not in record.__dict__:
+            record.remote_addr = 'N/A' 
+        return super().format(record)
+
+request_formatter = RequestFormatter(
+    '%(asctime)s [%(levelname)s] IP:%(remote_addr)s - %(message)s'
+)
+handler.setFormatter(request_formatter)
+app.logger.addHandler(handler)
+app.logger.setLevel(logging.INFO)
+
+@app.before_request
+def log_request_info():
+    app.logger.info(
+        f"{request.method} {request.path} data={request.get_data(as_text=True)}",
+        extra={'remote_addr': request.remote_addr}
+    )
 
 # Configuração do banco de dados SQLite (será um arquivo chamado database.db)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
