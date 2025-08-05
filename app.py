@@ -3,14 +3,48 @@
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 import jwt # PyJWT
+import logging
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
-from sqlalchemy import text # Importe o 'text'
+from sqlalchemy import text 
 import pickle
 import base64
-import os # Importe o 'os' para a demonstração do ataque
+import os 
+from waf import waf_protection
+
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 app = Flask(__name__)
+
+waf_protection(app)
+
+handler = RotatingFileHandler('app.log', maxBytes=10000, backupCount=1) 
+handler.setLevel(logging.INFO)
+formatter = logging.Formatter(
+    '%(asctime)s [%(levelname)s] IP:%(remote_addr)s - %(message)s'
+)
+handler.setFormatter(formatter)
+
+class RequestFormatter(logging.Formatter):
+    def format(self, record):
+        if 'remote_addr' not in record.__dict__:
+            record.remote_addr = 'N/A' 
+        return super().format(record)
+
+request_formatter = RequestFormatter(
+    '%(asctime)s [%(levelname)s] IP:%(remote_addr)s - %(message)s'
+)
+handler.setFormatter(request_formatter)
+app.logger.addHandler(handler)
+app.logger.setLevel(logging.INFO)
+
+@app.before_request
+def log_request_info():
+    app.logger.info(
+        f"{request.method} {request.path} data={request.get_data(as_text=True)}",
+        extra={'remote_addr': request.remote_addr}
+    )
+
 
 # Configuração do banco de dados SQLite (será um arquivo chamado database.db)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
@@ -26,27 +60,41 @@ db = SQLAlchemy(app)
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    # ATENÇÃO: Em um projeto real, NUNCA guarde senhas em texto plano.
-    # Use bibliotecas como Werkzeug ou passlib para gerar e verificar hashes.
     password = db.Column(db.String(80), nullable=False)
 
 class Note(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     content = db.Column(db.String(200), nullable=False)
-    # Chave estrangeira para ligar a nota ao seu dono
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
+def is_sql_injection_attempt(value):
+    if value is None:
+        return False
+    patterns = ["'", "\"", "--", ";", " OR ", " AND ", "="]
+    return any(pat in value.upper() for pat in patterns)
 
 # --- 3. ENDPOINTS DA API ---
 
 # Endpoint para fazer login
 @app.route('/login', methods=['POST'])
 def login():
-    data = request.get_json()
+    try:
+        data = request.get_json(force=True)
+    except Exception:
+        app.logger.warning(f"[ERRO JSON] IP: {request.remote_addr} | Body inválido recebido")
+        return jsonify({"message": "Formato JSON inválido"}), 400
     username = data.get('username')
     password = data.get('password')
+    app.logger.info(f"Login attempt: username={username}, password={password}")
+
 
     if not username or not password:
         return jsonify({"message": "Faltando usuário ou senha"}), 400
+
+    if is_sql_injection_attempt(username) or is_sql_injection_attempt(password):
+        app.logger.warning(f"[SUSPEITA SQLi] IP: {request.remote_addr} | Username: {username} | Password: {password}")
+    else:
+        app.logger.info(f"[LOGIN] IP: {request.remote_addr} | username={username} | password={password}")
 
     # ***** VULNERABILIDADE DE SQL INJECTION AQUI *****
     # A query está sendo montada com concatenação de strings.
@@ -96,12 +144,6 @@ def get_note(note_id):
     # A validação de IDOR ainda pode (e deve) ser feita aqui depois
     return jsonify({"id": note.id, "content": note.content})
 
-# --- 4. INICIALIZAÇÃO DO SERVIDOR ---
-if __name__ == '__main__':
-    # Cria as tabelas no banco de dados se elas não existirem
-    with app.app_context():
-        db.create_all()
-    app.run(debug=True) # debug=True nos ajuda a ver os erros no terminal
 
 @app.route('/profile/import', methods=['POST'])
 def import_profile():
@@ -125,3 +167,10 @@ def import_profile():
         print(f"Falha na importação: {e}")
         return jsonify({"message": "Dados inválidos"}), 400
     # ***************************************************************
+
+# --- 4. INICIALIZAÇÃO DO SERVIDOR ---
+
+if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+    app.run(debug=True)
