@@ -1,26 +1,58 @@
-# app.py
+# app1.1.py
 
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 import jwt
 from datetime import datetime, timedelta
-from sqlalchemy import text # Importe o 'text'
+from logging.handlers import RotatingFileHandler
+from sqlalchemy import text 
 import pickle
 import base64
-import os # Importe o 'os' para a demonstração do ataque
+import os 
 import time
+import logging
+from waf import waf_protection
+
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 app = Flask(__name__)
 
-# Configuração do banco de dados SQLite (será um arquivo chamado database.db)
+waf_protection(app)
+
+handler = RotatingFileHandler('app.log', maxBytes=10000, backupCount=1) 
+handler.setLevel(logging.INFO)
+formatter = logging.Formatter(
+    '%(asctime)s [%(levelname)s] IP:%(remote_addr)s - %(message)s'
+)
+handler.setFormatter(formatter)
+
+class RequestFormatter(logging.Formatter):
+    def format(self, record):
+        if 'remote_addr' not in record.__dict__:
+            record.remote_addr = 'N/A'  # Valor padrão se o IP não estiver disponível
+        return super().format(record)
+
+request_formatter = RequestFormatter(
+    '%(asctime)s [%(levelname)s] IP:%(remote_addr)s - %(message)s'
+)
+handler.setFormatter(request_formatter)
+app.logger.addHandler(handler)
+app.logger.setLevel(logging.INFO)
+
+@app.before_request
+def log_request_info():
+    app.logger.info(
+        f"{request.method} {request.path} data={request.get_data(as_text=True)}",
+        extra={'remote_addr': request.remote_addr}
+    )
+
+# configuração do banco de dados SQLite (database.db)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Chave secreta para assinar os tokens JWT. Em produção, isso deve ser um segredo!
+# secret key para assinar os tokens 
 app.config['SECRET_KEY'] = 'minha-chave-super-secreta'
 
-# Inicializa a extensão do banco de dados
 db = SQLAlchemy(app)
 
 # --- 2. MODELOS DO BANCO DE DADOS (Tabelas) ---
@@ -28,10 +60,8 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(80), nullable=False)
-    # NOVA COLUNA PARA O SALDO DO USUÁRIO
     balance = db.Column(db.Float, nullable=False, default=0.0)
 
-# NOVA TABELA PARA OS VALE-PRESENTES
 class GiftCard(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     code = db.Column(db.String(80), unique=True, nullable=False)
@@ -47,7 +77,7 @@ def get_me():
 
 @app.route('/giftcard/redeem', methods=['POST'])
 def redeem_gift_card():
-    user_id = 1 # Simula que o pedido é sempre da Alice
+    user_id = 1 # simula que o pedido é sempre da Alice
     data = request.get_json()
     card_code = data.get('code')
 
@@ -56,7 +86,7 @@ def redeem_gift_card():
     if not card:
         return jsonify({"message": "Vale-presente não encontrado"}), 404
 
-    # A verificação vulnerável continua aqui. Todas as threads passarão.
+    # verificação vulnerável continua aqui, todas as threads passarão
     if card.is_used:
         return jsonify({"message": "Este vale-presente já foi resgatado"}), 400
 
@@ -72,7 +102,7 @@ def redeem_gift_card():
 
         db.session.commit()
 
-        # 4. Pega o saldo mais recente do usuário para retornar na resposta
+        # pega o saldo mais recente do usuário para retornar na resposta
         user = User.query.get(user_id)
         
         return jsonify({
@@ -86,12 +116,10 @@ def redeem_gift_card():
 class Note(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     content = db.Column(db.String(200), nullable=False)
-    # Chave estrangeira para ligar a nota ao seu dono
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
 
 # --- 3. ENDPOINTS DA API ---
 
-# Endpoint para fazer login
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -102,8 +130,8 @@ def login():
         return jsonify({"message": "Faltando usuário ou senha"}), 400
 
     # ***** VULNERABILIDADE DE SQL INJECTION AQUI *****
-    # A query está sendo montada com concatenação de strings.
-    # Isso permite que um atacante injete comandos SQL.
+    # A query está sendo montada com concatenação de strings
+    # Isso permite que um atacante injete comandos SQL
     query_sql = text(f"SELECT * FROM user WHERE username = '{username}' AND password = '{password}'")
     result = db.session.execute(query_sql)
     user = result.fetchone()
@@ -112,7 +140,6 @@ def login():
     if not user:
         return jsonify({"message": "Credenciais inválidas"}), 401
 
-    # O 'user' aqui é uma tuple, então acessamos o ID pelo índice 0
     user_id = user[0] 
     token = jwt.encode({
         'sub': user_id,
@@ -122,7 +149,6 @@ def login():
 
     return jsonify({"token": token})
 
-# Endpoint para buscar uma anotação específica
 @app.route('/notes/<int:note_id>', methods=['GET'])
 def get_note(note_id):
     auth_header = request.headers.get('Authorization')
@@ -132,10 +158,9 @@ def get_note(note_id):
     token = auth_header.split(" ")[1]
     try:
         # ***** CORREÇÃO DA VULNERABILIDADE JWT AQUI *****
-        # Removendo options={"verify_signature": False} para que a assinatura seja verificada.
+        # removemos options={"verify_signature": False} para que a assinatura seja verificada
         decoded_token = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
         print(f"Token decodificado e validado: {decoded_token}")
-        # Extraindo o user_id do token validado
         user_id_from_token = decoded_token['sub']
         # ***********************************************
 
@@ -152,7 +177,7 @@ def get_note(note_id):
         return jsonify({"message": "Anotação não encontrada"}), 404
 
     # ***** CORREÇÃO DA VULNERABILIDADE IDOR AQUI *****
-    # Verifica se o user_id do token corresponde ao user_id da anotação
+    # verifica se o user_id do token corresponde ao user_id da anotação
     if note.user_id != user_id_from_token:
         return jsonify({"message": "Acesso negado. Você não é o proprietário desta anotação."}), 403
     # *************************************************
@@ -161,10 +186,9 @@ def get_note(note_id):
 
 # --- 4. INICIALIZAÇÃO DO SERVIDOR ---
 if __name__ == '__main__':
-    # Cria as tabelas no banco de dados se elas não existirem
     with app.app_context():
         db.create_all()
-    app.run(debug=True) # debug=True nos ajuda a ver os erros no terminal
+    app.run(debug=True) 
 
 @app.route('/profile/import', methods=['POST'])
 def import_profile():
@@ -180,7 +204,6 @@ def import_profile():
         decoded_data = base64.b64decode(encoded_data)
         profile_object = pickle.loads(decoded_data)
 
-        # Apenas para simular o uso do objeto
         print(f"Perfil importado com sucesso: {profile_object}")
         return jsonify({"message": "Perfil importado com sucesso."}), 200
 
