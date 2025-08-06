@@ -11,12 +11,15 @@ import pickle
 import base64
 import os 
 from waf import waf_protection
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 app = Flask(__name__)
 
 waf_protection(app)
+limiter = Limiter(key_func=get_remote_address, app=app)
 
 handler = RotatingFileHandler('app.log', maxBytes=10000, backupCount=1) 
 handler.setLevel(logging.INFO)
@@ -46,14 +49,11 @@ def log_request_info():
     )
 
 
-# Configuração do banco de dados SQLite (será um arquivo chamado database.db)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Chave secreta para assinar os tokens JWT. Em produção, isso deve ser um segredo!
 app.config['SECRET_KEY'] = 'minha-chave-super-secreta'
 
-# Inicializa a extensão do banco de dados
 db = SQLAlchemy(app)
 
 # --- 2. MODELOS DO BANCO DE DADOS (Tabelas) ---
@@ -73,10 +73,15 @@ def is_sql_injection_attempt(value):
     patterns = ["'", "\"", "--", ";", " OR ", " AND ", "="]
     return any(pat in value.upper() for pat in patterns)
 
+def detect_sqli(user_input):
+    patterns = ["' OR '1'='1", "--", "DROP", "SELECT"]
+    return any(p in user_input for p in patterns)
+
 # --- 3. ENDPOINTS DA API ---
 
 # Endpoint para fazer login
 @app.route('/login', methods=['POST'])
+@limiter.limit("5 per minute")
 def login():
     try:
         data = request.get_json(force=True)
@@ -84,6 +89,8 @@ def login():
         app.logger.warning(f"[ERRO JSON] IP: {request.remote_addr} | Body inválido recebido")
         return jsonify({"message": "Formato JSON inválido"}), 400
     username = data.get('username')
+    if detect_sqli(username):
+        send_alert("Possível SQLi detectado no login: " + username)
     password = data.get('password')
     app.logger.info(f"Login attempt: username={username}, password={password}")
 
@@ -96,16 +103,14 @@ def login():
     else:
         app.logger.info(f"[LOGIN] IP: {request.remote_addr} | username={username} | password={password}")
 
-    # ***** VULNERABILIDADE DE SQL INJECTION AQUI *****
-    # A query está sendo montada com concatenação de strings.
-    # Isso permite que um atacante injete comandos SQL.
+    # ***** VULNERABILIDADE DE SQL INJECTION  *****
     query_sql = text(f"SELECT * FROM user WHERE username = '{username}' AND password = '{password}'")
     result = db.session.execute(query_sql)
     user = result.fetchone()
     # *************************************************
 
     if not user:
-        return jsonify({"message": "Credenciais inválidas"}), 401
+        return jsonify({"message": "Credenciais invalidas"}), 401
 
     # O 'user' aqui é uma tuple, então acessamos o ID pelo índice 0
     user_id = user[0] 
@@ -118,16 +123,16 @@ def login():
     return jsonify({"token": token})
 
 # Endpoint para buscar uma anotação específica
-# app.py
 
 @app.route('/notes/<int:note_id>', methods=['GET'])
+@limiter.limit("5 per minute")
+
 def get_note(note_id):
     auth_header = request.headers.get('Authorization')
     if not auth_header:
         return jsonify({"message": "Token não encontrado"}), 401
 
-    # ***** VULNERABILIDADE JWT AQUI *****
-    # O token é pego do cabeçalho
+    # ***** VULNERABILIDADE JWT  *****
     token = auth_header.split(" ")[1]
     try:
         decoded_token_UNSAFE = jwt.decode(token, options={"verify_signature": False})
@@ -141,17 +146,16 @@ def get_note(note_id):
     if not note:
         return jsonify({"message": "Anotação não encontrada"}), 404
 
-    # A validação de IDOR ainda pode (e deve) ser feita aqui depois
     return jsonify({"id": note.id, "content": note.content})
 
 
 @app.route('/profile/import', methods=['POST'])
+@limiter.limit("5 per minute")
+
 def import_profile():
-    # O endpoint espera receber os dados do perfil em formato de texto,
-    # codificados em Base64 para transporte seguro.
     encoded_data = request.data
 
-    # ***** VULNERABILIDADE DE DESSERIALIZAÇÃO INSEGURA AQUI *****
+    # ***** VULNERABILIDADE DE DESSERIALIZAÇÃO INSEGURA  *****
     # O código decodifica os dados e usa pickle.loads() para reconstruir o objeto.
     # pickle é extremamente perigoso com dados de fontes não confiáveis,
     # pois o processo de desserialização pode ser instruído a executar código arbitrário.
