@@ -12,10 +12,12 @@ import os
 import time
 import logging
 from waf import waf_protection
-
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
 app = Flask(__name__)
+limiter = Limiter(key_func=get_remote_address, app=app)
 
 waf_protection(app)
 
@@ -29,7 +31,7 @@ handler.setFormatter(formatter)
 class RequestFormatter(logging.Formatter):
     def format(self, record):
         if 'remote_addr' not in record.__dict__:
-            record.remote_addr = 'N/A'  # Valor padrão se o IP não estiver disponível
+            record.remote_addr = 'N/A' 
         return super().format(record)
 
 request_formatter = RequestFormatter(
@@ -46,11 +48,8 @@ def log_request_info():
         extra={'remote_addr': request.remote_addr}
     )
 
-# configuração do banco de dados SQLite (database.db)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# secret key para assinar os tokens 
 app.config['SECRET_KEY'] = 'minha-chave-super-secreta'
 
 db = SQLAlchemy(app)
@@ -69,6 +68,7 @@ class GiftCard(db.Model):
     is_used = db.Column(db.Boolean, default=False, nullable=False)    
 
 @app.route('/me', methods=['GET'])
+@limiter.limit("5 per minute")
 def get_me():
     user = User.query.get(1)
     if not user:
@@ -76,8 +76,9 @@ def get_me():
     return jsonify({"username": user.username, "balance": user.balance})
 
 @app.route('/giftcard/redeem', methods=['POST'])
+@limiter.limit("5 per minute")
 def redeem_gift_card():
-    user_id = 1 # simula que o pedido é sempre da Alice
+    user_id = 1 
     data = request.get_json()
     card_code = data.get('code')
 
@@ -86,7 +87,6 @@ def redeem_gift_card():
     if not card:
         return jsonify({"message": "Vale-presente não encontrado"}), 404
 
-    # verificação vulnerável continua aqui, todas as threads passarão
     if card.is_used:
         return jsonify({"message": "Este vale-presente já foi resgatado"}), 400
 
@@ -102,7 +102,6 @@ def redeem_gift_card():
 
         db.session.commit()
 
-        # pega o saldo mais recente do usuário para retornar na resposta
         user = User.query.get(user_id)
         
         return jsonify({
@@ -121,6 +120,7 @@ class Note(db.Model):
 # --- 3. ENDPOINTS DA API ---
 
 @app.route('/login', methods=['POST'])
+@limiter.limit("5 per minute")
 def login():
     data = request.get_json()
     username = data.get('username')
@@ -130,8 +130,6 @@ def login():
         return jsonify({"message": "Faltando usuário ou senha"}), 400
 
     # ***** VULNERABILIDADE DE SQL INJECTION AQUI *****
-    # A query está sendo montada com concatenação de strings
-    # Isso permite que um atacante injete comandos SQL
     query_sql = text(f"SELECT * FROM user WHERE username = '{username}' AND password = '{password}'")
     result = db.session.execute(query_sql)
     user = result.fetchone()
@@ -150,6 +148,7 @@ def login():
     return jsonify({"token": token})
 
 @app.route('/notes/<int:note_id>', methods=['GET'])
+@limiter.limit("5 per minute")
 def get_note(note_id):
     auth_header = request.headers.get('Authorization')
     if not auth_header:
@@ -157,7 +156,7 @@ def get_note(note_id):
 
     token = auth_header.split(" ")[1]
     try:
-        # ***** CORREÇÃO DA VULNERABILIDADE JWT AQUI *****
+        # ***** CORREÇÃO DA VULNERABILIDADE JWT  *****
         # removemos options={"verify_signature": False} para que a assinatura seja verificada
         decoded_token = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
         print(f"Token decodificado e validado: {decoded_token}")
@@ -176,7 +175,7 @@ def get_note(note_id):
     if not note:
         return jsonify({"message": "Anotação não encontrada"}), 404
 
-    # ***** CORREÇÃO DA VULNERABILIDADE IDOR AQUI *****
+    # ***** CORREÇÃO DA VULNERABILIDADE IDOR *****
     # verifica se o user_id do token corresponde ao user_id da anotação
     if note.user_id != user_id_from_token:
         return jsonify({"message": "Acesso negado. Você não é o proprietário desta anotação."}), 403
@@ -184,19 +183,12 @@ def get_note(note_id):
 
     return jsonify({"id": note.id, "content": note.content, "user_id": note.user_id})
 
-# --- 4. INICIALIZAÇÃO DO SERVIDOR ---
-if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-    app.run(debug=True) 
-
 @app.route('/profile/import', methods=['POST'])
+@limiter.limit("5 per minute")
 def import_profile():
-    # O endpoint espera receber os dados do perfil em formato de texto,
-    # codificados em Base64 para transporte seguro.
     encoded_data = request.data
 
-    # ***** VULNERABILIDADE DE DESSERIALIZAÇÃO INSEGURA AQUI *****
+    # ***** VULNERABILIDADE DE DESSERIALIZAÇÃO INSEGURA *****
     # O código decodifica os dados e usa pickle.loads() para reconstruir o objeto.
     # pickle é extremamente perigoso com dados de fontes não confiáveis,
     # pois o processo de desserialização pode ser instruído a executar código arbitrário.
@@ -211,3 +203,9 @@ def import_profile():
         print(f"Falha na importação: {e}")
         return jsonify({"message": "Dados inválidos"}), 400
     # ***************************************************************
+
+    # --- 4. INICIALIZAÇÃO DO SERVIDOR ---
+if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+    app.run(debug=True) 
