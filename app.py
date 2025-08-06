@@ -172,9 +172,13 @@ def import_profile():
         return jsonify({"message": "Dados inválidos"}), 400
     # ***************************************************************
 
+def send_alert(message):
+    app.logger.warning(f"[ALERTA DE SEGURANÇA] {message}")
+
 # --- 4. INICIALIZAÇÃO DO SERVIDOR ---
 
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
     app.run(debug=True)
+
