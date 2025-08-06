@@ -1,6 +1,7 @@
 # populate_db.py
 
 from app import app, db, User, Note
+#from app1_1 import app, db, User, Note, GiftCard
 
 # Executar este script irá apagar os dados antigos e criar novos.
 with app.app_context():
@@ -22,8 +23,13 @@ with app.app_context():
 
     db.session.add(note_alice)
     db.session.add(note_bob)
+
+    gift_card = GiftCard(code='VALE50', value=50.0, is_used=False)
+    db.session.add(gift_card)
+
     db.session.commit() # Salva as anotações
 
     print("Banco de dados populado com Alice e Bob!")
     print(f"ID da nota da Alice: {note_alice.id}") # Provavelmente 1
     print(f"ID da nota do Bob: {note_bob.id}")   # Provavelmente 2
+    print(f"Vale-presente 'VALE50' criado com sucesso.")
