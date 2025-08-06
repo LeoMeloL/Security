@@ -10,7 +10,7 @@ import pickle
 import base64
 import os 
 import time
-import json
+import json 
 import logging
 from waf import waf_protection
 from flask_limiter import Limiter
@@ -21,7 +21,6 @@ app = Flask(__name__)
 limiter = Limiter(key_func=get_remote_address, app=app)
 
 waf_protection(app)
-
 
 handler = RotatingFileHandler('app.log', maxBytes=10000, backupCount=1) 
 handler.setLevel(logging.INFO)
@@ -71,6 +70,7 @@ class GiftCard(db.Model):
     value = db.Column(db.Float, nullable=False)
     is_used = db.Column(db.Boolean, default=False, nullable=False)    
 
+
 @app.route('/me', methods=['GET'])
 @limiter.limit("5 per minute")
 def get_me():
@@ -86,7 +86,12 @@ def redeem_gift_card():
     data = request.get_json()
     card_code = data.get('code')
 
-    card = GiftCard.query.filter_by(code=card_code).first()
+    # ***** CORREÇÃO DA VULNERABILIDADE DE CONDIÇÃO DE CORRIDA *****
+    # Usamos .with_for_update() para bloquear a linha do vale-presente.
+    # Isso garante que apenas uma transação por vez possa ler e modificar esta linha,
+    # prevenindo que o mesmo vale seja resgatado múltiplas vezes simultaneamente.
+    card = GiftCard.query.filter_by(code=card_code).with_for_update().first()
+    # ******************************************************************
 
     if not card:
         return jsonify({"message": "Vale-presente não encontrado"}), 404
@@ -98,7 +103,6 @@ def redeem_gift_card():
     time.sleep(1)
 
     try:
-
         update_balance_sql = text(f"UPDATE user SET balance = balance + {card.value} WHERE id = {user_id}")
         db.session.execute(update_balance_sql)
 
@@ -161,7 +165,7 @@ def get_note(note_id):
 
     token = auth_header.split(" ")[1]
     try:
-        # ***** CORREÇÃO DA VULNERABILIDADE JWT  (já corrigido) *****
+        # ***** CORREÇÃO DA VULNERABILIDADE JWT AQUI (já corrigido) *****
         # Removendo options={"verify_signature": False} para que a assinatura seja verificada.
         decoded_token = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
         print(f"Token decodificado e validado: {decoded_token}")
@@ -181,6 +185,7 @@ def get_note(note_id):
         return jsonify({"message": "Anotação não encontrada"}), 404
 
     # ***** CORREÇÃO DA VULNERABILIDADE IDOR *****
+    # Verifica se o user_id do token corresponde ao user_id da anotação
     if note.user_id != user_id_from_token:
         return jsonify({"message": "Acesso negado. Você não é o proprietário desta anotação."}), 403
     # *************************************************
@@ -207,11 +212,12 @@ def import_profile():
     except Exception as e:
         print(f"Falha na importação: {e}")
         return jsonify({"message": f"Dados inválidos ou erro no processamento: {e}"}), 400
-
     # *************************************************************************
+
 
     # --- 4. INICIALIZAÇÃO DO SERVIDOR ---
 if __name__ == '__main__':
+    # Cria as tabelas no banco de dados se elas não existirem
     with app.app_context():
         db.create_all()
-    app.run(debug=True) 
+    app.run(debug=True) # debug=True nos ajuda a ver os erros no terminal
