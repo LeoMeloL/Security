@@ -1,4 +1,4 @@
-# app1.4.py
+# app1.3.py
 
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
@@ -10,7 +10,7 @@ import pickle
 import base64
 import os 
 import time
-import json 
+import json
 import logging
 from waf import waf_protection
 from flask_limiter import Limiter
@@ -21,6 +21,7 @@ app = Flask(__name__)
 limiter = Limiter(key_func=get_remote_address, app=app)
 
 waf_protection(app)
+
 
 handler = RotatingFileHandler('app.log', maxBytes=10000, backupCount=1) 
 handler.setLevel(logging.INFO)
@@ -70,7 +71,6 @@ class GiftCard(db.Model):
     value = db.Column(db.Float, nullable=False)
     is_used = db.Column(db.Boolean, default=False, nullable=False)    
 
-
 @app.route('/me', methods=['GET'])
 @limiter.limit("5 per minute")
 def get_me():
@@ -86,12 +86,7 @@ def redeem_gift_card():
     data = request.get_json()
     card_code = data.get('code')
 
-    # ***** CORREÇÃO DA VULNERABILIDADE DE CONDIÇÃO DE CORRIDA *****
-    # Usamos .with_for_update() para bloquear a linha do vale-presente.
-    # Isso garante que apenas uma transação por vez possa ler e modificar esta linha,
-    # prevenindo que o mesmo vale seja resgatado múltiplas vezes simultaneamente.
-    card = GiftCard.query.filter_by(code=card_code).with_for_update().first()
-    # ******************************************************************
+    card = GiftCard.query.filter_by(code=card_code).first()
 
     if not card:
         return jsonify({"message": "Vale-presente não encontrado"}), 404
@@ -103,6 +98,7 @@ def redeem_gift_card():
     time.sleep(1)
 
     try:
+
         update_balance_sql = text(f"UPDATE user SET balance = balance + {card.value} WHERE id = {user_id}")
         db.session.execute(update_balance_sql)
 
@@ -156,6 +152,7 @@ def login():
 
     return jsonify({"token": token})
 
+# Endpoint para buscar uma anotação específica
 @app.route('/notes/<int:note_id>', methods=['GET'])
 @limiter.limit("5 per minute")
 def get_note(note_id):
@@ -165,7 +162,7 @@ def get_note(note_id):
 
     token = auth_header.split(" ")[1]
     try:
-        # ***** CORREÇÃO DA VULNERABILIDADE JWT AQUI (já corrigido) *****
+        # ***** CORREÇÃO DA VULNERABILIDADE JWT (já corrigido) *****
         # Removendo options={"verify_signature": False} para que a assinatura seja verificada.
         decoded_token = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
         print(f"Token decodificado e validado: {decoded_token}")
@@ -197,7 +194,7 @@ def get_note(note_id):
 @limiter.limit("5 per minute")
 def import_profile():
     try:
-        # ***** CORREÇÃO DA VULNERABILIDADE DE DESSERIALIZAÇÃO INSEGURA *****
+        # ***** CORREÇÃO DA VULNERABILIDADE DE DESSERIALIZAÇÃO INSEGURA  *****
         # Em vez de pickle.loads(), usamos request.get_json() para parsear JSON.
         # Isso garante que apenas dados JSON válidos sejam processados,
         # impedindo a execução de código arbitrário.
@@ -212,12 +209,11 @@ def import_profile():
     except Exception as e:
         print(f"Falha na importação: {e}")
         return jsonify({"message": f"Dados inválidos ou erro no processamento: {e}"}), 400
-    # *************************************************************************
 
+    # *************************************************************************
 
     # --- 4. INICIALIZAÇÃO DO SERVIDOR ---
 if __name__ == '__main__':
-    # Cria as tabelas no banco de dados se elas não existirem
     with app.app_context():
         db.create_all()
     app.run(debug=True) # debug=True nos ajuda a ver os erros no terminal
