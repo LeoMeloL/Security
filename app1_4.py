@@ -16,7 +16,7 @@ from waf import waf_protection
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
-# --- 1. CONFIGURAÇÃO INICIAL ---
+# --- CONFIGURAÇÃO INICIAL ---
 app = Flask(__name__)
 limiter = Limiter(key_func=get_remote_address, app=app)
 
@@ -51,19 +51,18 @@ def log_request_info():
 
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
 app.config['SECRET_KEY'] = 'minha-chave-super-secreta'
 
 db = SQLAlchemy(app)
 
-# --- 2. MODELOS DO BANCO DE DADOS (Tabelas) ---
+# --- MODELOS DO BANCO DE DADOS  ---
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(80), nullable=False)
-    # NOVA COLUNA PARA O SALDO DO USUÁRIO
     balance = db.Column(db.Float, nullable=False, default=0.0)
 
-# NOVA TABELA PARA OS VALE-PRESENTES
 class GiftCard(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     code = db.Column(db.String(80), unique=True, nullable=False)
@@ -82,20 +81,21 @@ def get_me():
 @app.route('/giftcard/redeem', methods=['POST'])
 @limiter.limit("5 per minute")
 def redeem_gift_card():
-    user_id = 1 
+    user_id = 1 # pedido é sempre da Alice
     data = request.get_json()
     card_code = data.get('code')
 
     # ***** CORREÇÃO DA VULNERABILIDADE DE CONDIÇÃO DE CORRIDA *****
-    # Usamos .with_for_update() para bloquear a linha do vale-presente.
-    # Isso garante que apenas uma transação por vez possa ler e modificar esta linha,
-    # prevenindo que o mesmo vale seja resgatado múltiplas vezes simultaneamente.
+    # usamos .with_for_update() para bloquear a linha do vale-presente
+    # isso garante que apenas uma transação por vez possa ler e modificar esta linha,
+    # prevenindo que o mesmo vale seja resgatado múltiplas vezes simultaneamente
     card = GiftCard.query.filter_by(code=card_code).with_for_update().first()
     # ******************************************************************
 
     if not card:
         return jsonify({"message": "Vale-presente não encontrado"}), 404
 
+    # verificação agora é segura, pois a linha está bloqueada
     if card.is_used:
         return jsonify({"message": "Este vale-presente já foi resgatado"}), 400
 
@@ -103,11 +103,14 @@ def redeem_gift_card():
     time.sleep(1)
 
     try:
+        # atualiza o saldo do usuário
         update_balance_sql = text(f"UPDATE user SET balance = balance + {card.value} WHERE id = {user_id}")
         db.session.execute(update_balance_sql)
 
+        # marca o giftcard como usado
         card.is_used = True
 
+        # confirma a transação, liberando o bloqueio da linha
         db.session.commit()
 
         user = User.query.get(user_id)
@@ -125,9 +128,8 @@ class Note(db.Model):
     content = db.Column(db.String(200), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
 
-# --- 3. ENDPOINTS DA API ---
+# --- ENDPOINTS DA API ---
 
-# Endpoint para fazer login
 @app.route('/login', methods=['POST'])
 @limiter.limit("5 per minute")
 def login():
@@ -139,10 +141,9 @@ def login():
         return jsonify({"message": "Faltando usuário ou senha"}), 400
 
     # ***** CORREÇÃO DA VULNERABILIDADE DE SQL INJECTION *****
-    # Usando filter_by do SQLAlchemy para parametrizar a consulta.
-    # Isso impede que a entrada do usuário seja interpretada como código SQL.
+    # usando filter_by do SQLAlchemy para parametrizar a consulta
+    # Isso impede que a entrada do usuário seja interpretada como código SQL
     user = User.query.filter_by(username=username, password=password).first()
-    # *************************************************************
 
     if not user:
         return jsonify({"message": "Credenciais inválidas"}), 401
@@ -165,12 +166,11 @@ def get_note(note_id):
 
     token = auth_header.split(" ")[1]
     try:
-        # ***** CORREÇÃO DA VULNERABILIDADE JWT (já corrigido) *****
-        # Removendo options={"verify_signature": False} para que a assinatura seja verificada.
+        # ***** CORREÇÃO DA VULNERABILIDADE JWT *****
+        # Removendo options={"verify_signature": False} para que a assinatura seja verificada
         decoded_token = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
         print(f"Token decodificado e validado: {decoded_token}")
         user_id_from_token = decoded_token['sub']
-        # **************************************************************************
 
     except jwt.ExpiredSignatureError:
         return jsonify({"message": "Token expirado"}), 401
@@ -185,9 +185,9 @@ def get_note(note_id):
         return jsonify({"message": "Anotação não encontrada"}), 404
 
     # ***** CORREÇÃO DA VULNERABILIDADE IDOR *****
+    # Verifica se o user_id do token corresponde ao user_id da anotação
     if note.user_id != user_id_from_token:
         return jsonify({"message": "Acesso negado. Você não é o proprietário desta anotação."}), 403
-    # *************************************************
 
     return jsonify({"id": note.id, "content": note.content, "user_id": note.user_id})
 
@@ -197,11 +197,12 @@ def get_note(note_id):
 def import_profile():
     try:
         # ***** CORREÇÃO DA VULNERABILIDADE DE DESSERIALIZAÇÃO INSEGURA *****
-        # Em vez de pickle.loads(), usamos request.get_json() para parsear JSON.
-        # Isso garante que apenas dados JSON válidos sejam processados,
+        # em vez de pickle.loads(), usamos request.get_json() para parsear JSON
+        # isso garante que apenas dados JSON válidos sejam processados,
         # impedindo a execução de código arbitrário.
         profile_data = request.get_json()
 
+        # verifica se os dados JSON foram recebidos corretamente
         if profile_data is None:
             return jsonify({"message": "Dados JSON inválidos ou ausentes"}), 400
 
@@ -211,11 +212,10 @@ def import_profile():
     except Exception as e:
         print(f"Falha na importação: {e}")
         return jsonify({"message": f"Dados inválidos ou erro no processamento: {e}"}), 400
-    # *************************************************************************
 
 
-    # --- 4. INICIALIZAÇÃO DO SERVIDOR ---
+    # --- INICIALIZAÇÃO DO SERVIDOR ---
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True) 
+    app.run(debug=True)
