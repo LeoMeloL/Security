@@ -31,12 +31,12 @@ threads = []
 for i in range(NUM_REQUESTS):
     thread = threading.Thread(target=make_request, args=(i,))
     threads.append(thread)
-    thread.start() # Inicia a thread
+    thread.start() 
 
-# Espera todas as threads terminarem
 for thread in threads:
     thread.join()
 
 print("\nAtaque concluído!")
 
 print("Verifique o saldo do usuário na API GET /me para ver o resultado.")
+
