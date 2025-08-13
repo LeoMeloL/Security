@@ -5,8 +5,7 @@ import threading
 # --- CONFIGURAÇÃO ---
 NUM_REQUESTS = 10  # Quantas vezes tentaremos resgatar o mesmo vale
 TARGET_URL = "http://127.0.0.1:5000/giftcard/redeem"
-# Cole aqui um token JWT válido se seu endpoint exigir autenticação real
-# JWT_TOKEN = "seu.token.jwt" 
+
 
 headers = {
     'Content-Type': 'application/json',
@@ -39,4 +38,5 @@ for thread in threads:
     thread.join()
 
 print("\nAtaque concluído!")
+
 print("Verifique o saldo do usuário na API GET /me para ver o resultado.")
