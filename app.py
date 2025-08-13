@@ -13,6 +13,7 @@ import os
 from waf import waf_protection
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+import time
 
 
 # --- 1. CONFIGURAÇÃO INICIAL ---
@@ -41,6 +42,7 @@ handler.setFormatter(request_formatter)
 app.logger.addHandler(handler)
 app.logger.setLevel(logging.INFO)
 
+
 @app.before_request
 def log_request_info():
     app.logger.info(
@@ -61,11 +63,19 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(80), nullable=False)
+    balance = db.Column(db.Float, default=0.0)
 
 class Note(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     content = db.Column(db.String(200), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+
+class GiftCard(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    code = db.Column(db.String(80), unique=True, nullable=False)
+    value = db.Column(db.Float, nullable=False)
+    is_used = db.Column(db.Boolean, default=False, nullable=False)  
+
 
 def is_sql_injection_attempt(value):
     if value is None:
@@ -79,6 +89,51 @@ def detect_sqli(user_input):
 
 # --- 3. ENDPOINTS DA API ---
 
+@app.route('/me', methods=['GET'])
+@limiter.limit("5 per minute")
+def get_me():
+    user = User.query.get(1)
+    if not user:
+        return jsonify({"message": "Usuário não encontrado"}), 404
+    return jsonify({"username": user.username, "balance": user.balance})
+
+@app.route('/giftcard/redeem', methods=['POST'])
+@limiter.limit("5 per minute")
+def redeem_gift_card():
+    user_id = 1 
+    data = request.get_json()
+    card_code = data.get('code')
+
+    card = GiftCard.query.filter_by(code=card_code).first()
+
+    if not card:
+        return jsonify({"message": "Vale-presente não encontrado"}), 404
+
+    if card.is_used:
+        return jsonify({"message": "Este vale-presente já foi resgatado"}), 400
+
+    print(f"Resgatando vale {card_code}... Processando...")
+    time.sleep(1)
+
+    try:
+
+        update_balance_sql = text(f"UPDATE user SET balance = balance + {card.value} WHERE id = {user_id}")
+        db.session.execute(update_balance_sql)
+
+        card.is_used = True
+
+        db.session.commit()
+
+        user = User.query.get(user_id)
+        
+        return jsonify({
+            "message": f"Vale de R${card.value} resgatado com sucesso!",
+            "new_balance": user.balance
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"message": f"Ocorreu um erro no commit: {e}"}), 500
 # Endpoint para fazer login
 @app.route('/login', methods=['POST'])
 @limiter.limit("5 per minute")
