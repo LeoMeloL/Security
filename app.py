@@ -16,7 +16,7 @@ from flask_limiter.util import get_remote_address
 import time
 
 
-# --- 1. CONFIGURAÇÃO INICIAL ---
+# --- CONFIGURAÇÃO INICIAL ---
 app = Flask(__name__)
 
 waf_protection(app)
@@ -58,7 +58,7 @@ app.config['SECRET_KEY'] = 'minha-chave-super-secreta'
 
 db = SQLAlchemy(app)
 
-# --- 2. MODELOS DO BANCO DE DADOS (Tabelas) ---
+# --- MODELOS DO BANCO DE DADOS ---
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
@@ -87,7 +87,7 @@ def detect_sqli(user_input):
     patterns = ["' OR '1'='1", "--", "DROP", "SELECT"]
     return any(p in user_input for p in patterns)
 
-# --- 3. ENDPOINTS DA API ---
+# --- ENDPOINTS DA API ---
 
 @app.route('/me', methods=['GET'])
 @limiter.limit("5 per minute")
@@ -162,12 +162,10 @@ def login():
     query_sql = text(f"SELECT * FROM user WHERE username = '{username}' AND password = '{password}'")
     result = db.session.execute(query_sql)
     user = result.fetchone()
-    # *************************************************
 
     if not user:
         return jsonify({"message": "Credenciais invalidas"}), 401
 
-    # O 'user' aqui é uma tuple, então acessamos o ID pelo índice 0
     user_id = user[0] 
     token = jwt.encode({
         'sub': user_id,
@@ -194,7 +192,6 @@ def get_note(note_id):
         print(f"Token decodificado sem validação: {decoded_token_UNSAFE}") # Log para vermos o ataque
     except Exception as e:
         return jsonify({"message": f"Token inválido: {e}"}), 401
-    # ***********************************
 
     note = Note.query.get(note_id)
 
@@ -211,29 +208,27 @@ def import_profile():
     encoded_data = request.data
 
     # ***** VULNERABILIDADE DE DESSERIALIZAÇÃO INSEGURA  *****
-    # O código decodifica os dados e usa pickle.loads() para reconstruir o objeto.
+    # código decodifica os dados e usa pickle.loads() para reconstruir o objeto
     # pickle é extremamente perigoso com dados de fontes não confiáveis,
-    # pois o processo de desserialização pode ser instruído a executar código arbitrário.
+    # pois o processo de desserialização pode ser instruído a executar código arbitrário
     try:
         decoded_data = base64.b64decode(encoded_data)
         profile_object = pickle.loads(decoded_data)
 
-        # Apenas para simular o uso do objeto
+        # apenas para simular o uso do objeto
         print(f"Perfil importado com sucesso: {profile_object}")
         return jsonify({"message": "Perfil importado com sucesso."}), 200
 
     except Exception as e:
         print(f"Falha na importação: {e}")
         return jsonify({"message": "Dados inválidos"}), 400
-    # ***************************************************************
 
 def send_alert(message):
     app.logger.warning(f"[ALERTA DE SEGURANÇA] {message}")
 
-# --- 4. INICIALIZAÇÃO DO SERVIDOR ---
+# --- INICIALIZAÇÃO DO SERVIDOR ---
 
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
     app.run(debug=True)
-
